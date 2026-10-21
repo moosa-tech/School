@@ -49,10 +49,15 @@
                                 <td class="p-3 text-slate-500">{{ $es->exam_date?->format('Y-m-d') ?? 'TBD' }}</td>
                                 <td class="p-3 font-mono font-semibold">{{ $es->max_marks }} / {{ $es->passing_marks }}</td>
                                 <td class="p-3 text-right">
+                                    <div class="inline-flex flex-wrap justify-end gap-2">
                                     <a href="{{ route('school-admin.exams.marks.entry', $es) }}" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold px-3 py-1.5 rounded-lg transition inline-flex items-center space-x-1">
                                         <i class="fa-solid fa-pen-to-square text-[10px]"></i>
                                         <span>Enter Marks</span>
                                     </a>
+                                    <a href="{{ route('school-admin.exams.marks.import', $es) }}" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-3 py-1.5 rounded-lg transition inline-flex items-center space-x-1">
+                                        <span>Import Marks</span>
+                                    </a>
+                                    </div>
                                 </td>
                             </tr>
                         @empty

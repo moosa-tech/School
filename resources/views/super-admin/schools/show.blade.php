@@ -16,6 +16,9 @@
         </div>
 
         <div class="flex items-center space-x-3">
+            <a href="{{ route('super-admin.schools.edit', $school) }}" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition">
+                Edit Configuration
+            </a>
             <a href="{{ route('super-admin.schools.index') }}" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold rounded-xl transition">
                 Back to Schools
             </a>
@@ -38,28 +41,23 @@
         </div>
         <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 text-center">
             <div class="text-xl font-bold text-purple-600 truncate">{{ $school->currentSubscription?->plan?->name ?? 'None' }}</div>
-            <div class="text-xs font-bold text-slate-500 uppercase mt-1">Active Plan</div>
+            <div class="text-xs font-bold text-slate-500 uppercase mt-1">Current Plan</div>
+            <div class="mt-1 text-xs text-slate-600">Subscription: {{ ucfirst($school->currentSubscription?->status ?? 'none') }}</div>
         </div>
     </div>
 
-    @if(session('initial_admin_password'))
+    @if(session('invitation_url'))
         <div class="bg-amber-50 border border-amber-300 rounded-2xl p-5 shadow-sm space-y-2">
             <div class="flex items-center space-x-2 text-amber-900 font-bold text-sm">
-                <i class="fa-solid fa-key text-amber-600 text-base"></i>
-                <span>Initial School Admin Login Credentials</span>
+                <i class="fa-solid fa-envelope text-amber-600 text-base"></i>
+                <span>School Admin Invitation</span>
             </div>
             <p class="text-xs text-amber-800">
-                These credentials are shown once. The admin should change the default password after logging in.
+                Share this one-time link securely. The administrator will choose their own password.
             </p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 text-xs">
-                <div class="bg-white px-3 py-2 border border-amber-300 rounded-xl">
-                    <div class="text-amber-700 font-semibold">Admin Email</div>
-                    <div class="font-mono text-slate-800">{{ session('initial_admin_email') }}</div>
-                </div>
-                <div class="bg-white px-3 py-2 border border-amber-300 rounded-xl">
-                    <div class="text-amber-700 font-semibold">Default Password</div>
-                    <div class="font-mono text-slate-800">{{ session('initial_admin_password') }}</div>
-                </div>
+            <div class="bg-white px-3 py-2 border border-amber-300 rounded-xl text-xs">
+                <div class="text-amber-700 font-semibold">Invite {{ session('initial_admin_email') }}</div>
+                <a href="{{ session('invitation_url') }}" class="break-all font-mono text-indigo-700 underline">{{ session('invitation_url') }}</a>
             </div>
         </div>
     @endif
@@ -104,10 +102,22 @@
                         <option value="suspended" {{ $school->status === 'suspended' ? 'selected' : '' }}>Suspended</option>
                         <option value="archived" {{ $school->status === 'archived' ? 'selected' : '' }}>Archived</option>
                     </select>
-                    <button type="submit" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+                    <button type="submit" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold px-4 py-2 rounded-xl transition"
+                        onclick="return this.form.status.value === 'active' || confirm('Deactivate this school? Its users will lose access; records and subscription history will be preserved.');">
                         Update Status
                     </button>
                 </form>
+            </div>
+
+            <div class="pt-4 border-t border-slate-100">
+                <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Enabled Portals</h3>
+                <div class="flex flex-wrap gap-2">
+                    @foreach(\App\Models\School::PORTAL_LABELS as $portal => $label)
+                        <span class="rounded-full px-2.5 py-1 text-xs font-semibold {{ $school->isPortalEnabled($portal) ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500' }}">
+                            {{ $label }}: {{ $school->isPortalEnabled($portal) ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    @endforeach
+                </div>
             </div>
         </div>
 

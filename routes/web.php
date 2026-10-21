@@ -11,6 +11,7 @@ use App\Http\Controllers\SchoolAdmin\ClassController;
 use App\Http\Controllers\SchoolAdmin\DashboardController as SchoolDashboardController;
 use App\Http\Controllers\SchoolAdmin\EmployeeController;
 use App\Http\Controllers\SchoolAdmin\ExamController;
+use App\Http\Controllers\SchoolAdmin\ExamMarksImportController;
 use App\Http\Controllers\SchoolAdmin\FeeController;
 use App\Http\Controllers\SchoolAdmin\HomeworkController;
 use App\Http\Controllers\SchoolAdmin\ReportController;
@@ -70,6 +71,8 @@ Route::prefix('super-admin')
         Route::get('/schools/create', [SchoolController::class, 'create'])->name('schools.create');
         Route::post('/schools', [SchoolController::class, 'store'])->name('schools.store');
         Route::get('/schools/{school}', [SchoolController::class, 'show'])->name('schools.show');
+        Route::get('/schools/{school}/edit', [SchoolController::class, 'edit'])->name('schools.edit');
+        Route::patch('/schools/{school}', [SchoolController::class, 'update'])->name('schools.update');
         Route::post('/schools/{school}/status', [SchoolController::class, 'updateStatus'])->name('schools.status');
         Route::post('/schools/{school}/invite', [SchoolController::class, 'invite'])->name('schools.invite');
         Route::post('/schools/{school}/switch', [SchoolController::class, 'switchContext'])->name('schools.switch');
@@ -166,13 +169,27 @@ Route::prefix('school-admin')
         // Exams & Marks (admin, principal, teacher)
         Route::middleware('school_tenant:school_admin|principal|teacher')->group(function () {
             Route::get('/exams', [ExamController::class, 'index'])->name('exams.index');
-            Route::post('/exams', [ExamController::class, 'store'])->name('exams.store');
+            Route::post('/exams', [ExamController::class, 'store'])
+                ->middleware('school_tenant:school_admin|principal')
+                ->name('exams.store');
             Route::get('/exams/{exam}', [ExamController::class, 'show'])->name('exams.show');
-            Route::post('/exams/{exam}/subjects', [ExamController::class, 'addSubject'])->name('exams.subjects.add');
-            Route::post('/exams/{exam}/toggle-publish', [ExamController::class, 'togglePublish'])->name('exams.toggle-publish');
+            Route::post('/exams/{exam}/subjects', [ExamController::class, 'addSubject'])
+                ->middleware('school_tenant:school_admin|principal')
+                ->name('exams.subjects.add');
+            Route::post('/exams/{exam}/toggle-publish', [ExamController::class, 'togglePublish'])
+                ->middleware('school_tenant:school_admin|principal')
+                ->name('exams.toggle-publish');
             Route::get('/exam-subjects/{examSubject}/marks', [ExamController::class, 'marksEntry'])->name('exams.marks.entry');
             Route::post('/exam-subjects/{examSubject}/marks', [ExamController::class, 'saveMarks'])->name('exams.marks.save');
-            Route::get('/exams/{exam}/students/{student}/report-card', [ExamController::class, 'reportCard'])->name('exams.report-card');
+            Route::get('/exam-subjects/{examSubject}/marks/import', [ExamMarksImportController::class, 'create'])->name('exams.marks.import');
+            Route::get('/exam-subjects/{examSubject}/marks/template', [ExamMarksImportController::class, 'downloadTemplate'])->name('exams.marks.template');
+            Route::post('/exam-subjects/{examSubject}/marks/import/preview', [ExamMarksImportController::class, 'preview'])->name('exams.marks.import.preview');
+            Route::post('/exam-subjects/{examSubject}/marks/import/confirm', [ExamMarksImportController::class, 'confirm'])->name('exams.marks.import.confirm');
+            Route::post('/exam-subjects/{examSubject}/marks/import/errors', [ExamMarksImportController::class, 'downloadErrors'])->name('exams.marks.import.errors');
+            Route::get('/exam-subjects/{examSubject}/marks/export', [ExamMarksImportController::class, 'export'])->name('exams.marks.export');
+            Route::get('/exams/{exam}/students/{student}/report-card', [ExamController::class, 'reportCard'])
+                ->middleware('school_tenant:school_admin|principal')
+                ->name('exams.report-card');
         });
 
         // Homework (teacher & admin)

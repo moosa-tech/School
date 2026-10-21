@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\School;
 use App\Models\User;
 use App\Services\AuditLogService;
+use App\Support\SchoolAccess;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -94,22 +96,30 @@ class LoginController extends Controller
      */
     protected function redirectAfterAuth(User $user): RedirectResponse
     {
-        if ($user->must_change_password) {
-            return redirect()->route('profile.password');
-        }
-
         if ($user->isSuperAdmin()) {
+            if ($user->must_change_password) {
+                return redirect()->route('profile.password');
+            }
+
             return redirect()->route('super-admin.dashboard');
         }
 
-        // Set primary active school in session
-        $school = $user->schools()
+        $activeMemberships = $user->schools()
             ->wherePivot('status', 'active')
             ->orderBy('schools.id')
-            ->first();
+            ->get();
+
+        $school = $activeMemberships->first(
+            fn (School $school): bool => SchoolAccess::roleCanAccessSchool($school, $school->pivot->role)
+        );
+
         if ($school) {
             session(['current_school_id' => $school->id]);
             $role = $user->schoolRole($school->id);
+
+            if ($user->must_change_password) {
+                return redirect()->route('profile.password');
+            }
 
             return match ($role) {
                 'teacher' => redirect()->route('teacher.dashboard'),
@@ -120,17 +130,27 @@ class LoginController extends Controller
             };
         }
 
+        if ($activeMemberships->contains(fn (School $school): bool => $school->status !== 'active')) {
+            return $this->rejectUnassignedUser(
+                'Your school account is currently inactive. Please contact your school administrator.'
+            );
+        }
+
+        if ($activeMemberships->isNotEmpty()) {
+            return $this->rejectUnassignedUser(
+                'The portal for your role is currently disabled for this school.'
+            );
+        }
+
         return $this->rejectUnassignedUser();
     }
 
-    private function rejectUnassignedUser(): RedirectResponse
+    private function rejectUnassignedUser(string $message = 'This account is not assigned to an active school role.'): RedirectResponse
     {
         Auth::logout();
         request()->session()->invalidate();
         request()->session()->regenerateToken();
 
-        return redirect()->route('login')->withErrors([
-            'email' => 'This account is not assigned to an active school role.',
-        ]);
+        return redirect()->route('login')->withErrors(['email' => $message]);
     }
 }

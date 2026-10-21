@@ -39,6 +39,9 @@ class ExamController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $schoolId = session('current_school_id');
+        if (! SchoolAccess::hasSchoolRole($request->user(), ['school_admin', 'principal'], (int) $schoolId)) {
+            abort(403);
+        }
 
         $validated = $request->validate([
             'academic_year_id' => ['required', SchoolAccess::existsInSchool('academic_years', $schoolId)],
@@ -88,7 +91,10 @@ class ExamController extends Controller
     public function addSubject(Request $request, Exam $exam): RedirectResponse
     {
         $schoolId = session('current_school_id');
-        if ($exam->school_id !== $schoolId) {
+        if (
+            $exam->school_id !== $schoolId
+            || ! SchoolAccess::hasSchoolRole($request->user(), ['school_admin', 'principal'], (int) $schoolId)
+        ) {
             abort(403);
         }
 
@@ -124,12 +130,21 @@ class ExamController extends Controller
      */
     public function marksEntry(ExamSubject $examSubject): View
     {
-        $schoolId = session('current_school_id');
-        if ($examSubject->school_id !== $schoolId) {
+        $schoolId = (int) session('current_school_id');
+        if (
+            $examSubject->school_id !== $schoolId
+            || ! SchoolAccess::hasSchoolRole(auth()->user(), ['school_admin', 'principal', 'teacher'], $schoolId)
+        ) {
             abort(403);
         }
 
         $examSubject->load(['exam', 'classSubject.class', 'classSubject.subject']);
+        if (
+            auth()->user()->schoolRole($schoolId) === 'teacher'
+            && ! SchoolAccess::teacherIsAssignedToClassSubject(auth()->user(), $examSubject->classSubject, (int) $schoolId)
+        ) {
+            abort(403, 'Teachers may only access marks for their assigned classes and subjects.');
+        }
 
         // Load enrolled students in this class
         $enrollments = StudentEnrollment::forSchool($schoolId)
@@ -153,13 +168,20 @@ class ExamController extends Controller
      */
     public function saveMarks(Request $request, ExamSubject $examSubject): RedirectResponse
     {
-        $schoolId = session('current_school_id');
-        if ($examSubject->school_id !== $schoolId) {
+        $schoolId = (int) session('current_school_id');
+        if (
+            $examSubject->school_id !== $schoolId
+            || ! SchoolAccess::hasSchoolRole($request->user(), ['school_admin', 'principal', 'teacher'], $schoolId)
+        ) {
             abort(403);
         }
 
-        if ($examSubject->exam->status === 'locked') {
-            return back()->withErrors(['error' => 'This exam results are locked. Edits require super admin unlocking.']);
+        $examSubject->loadMissing(['exam', 'classSubject']);
+        if (
+            $request->user()->schoolRole($schoolId) === 'teacher'
+            && ! SchoolAccess::teacherIsAssignedToClassSubject($request->user(), $examSubject->classSubject, $schoolId)
+        ) {
+            abort(403, 'Teachers may only enter marks for their assigned classes and subjects.');
         }
 
         $validated = $request->validate([
@@ -168,6 +190,19 @@ class ExamController extends Controller
             'marks.*.status' => ['required', 'in:graded,absent,exempt'],
             'marks.*.obtained' => ['nullable', 'numeric', 'min:0'],
         ]);
+
+        $markErrors = [];
+        foreach ($validated['marks'] as $studentId => $data) {
+            if ($data['status'] === 'graded' && ! filled($data['obtained'] ?? null)) {
+                $markErrors["marks.{$studentId}.obtained"] = 'Obtained marks are required for graded students.';
+            } elseif ($data['status'] !== 'graded' && filled($data['obtained'] ?? null)) {
+                $markErrors["marks.{$studentId}.obtained"] = 'Obtained marks must be blank for absent or exempt students.';
+            }
+        }
+
+        if ($markErrors !== []) {
+            throw ValidationException::withMessages($markErrors);
+        }
 
         $studentIds = array_keys($validated['marks']);
         $hasInvalidStudentId = count(array_filter(
@@ -198,20 +233,38 @@ class ExamController extends Controller
         }
 
         DB::transaction(function () use ($schoolId, $examSubject, $validated) {
+            $exam = Exam::query()
+                ->whereKey($examSubject->exam_id)
+                ->where('school_id', $schoolId)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($exam->status === 'locked') {
+                throw ValidationException::withMessages([
+                    'error' => 'This exam results are locked. Marks cannot be changed.',
+                ]);
+            }
+
+            $lockedExamSubject = ExamSubject::query()
+                ->whereKey($examSubject->id)
+                ->where('school_id', $schoolId)
+                ->lockForUpdate()
+                ->firstOrFail();
+
             foreach ($validated['marks'] as $studentId => $data) {
                 $status = $data['status'] ?? 'graded';
-                $obtained = $status === 'graded' ? (float) ($data['obtained'] ?? 0) : null;
+                $obtained = $status === 'graded' ? (float) $data['obtained'] : null;
 
-                if ($obtained !== null && ($obtained < 0 || $obtained > (float) $examSubject->max_marks)) {
+                if ($obtained !== null && ($obtained < 0 || $obtained > (float) $lockedExamSubject->max_marks)) {
                     throw ValidationException::withMessages([
-                        "marks.{$studentId}.obtained" => "Marks must be between 0 and {$examSubject->max_marks}.",
+                        "marks.{$studentId}.obtained" => "Marks must be between 0 and {$lockedExamSubject->max_marks}.",
                     ]);
                 }
 
                 Mark::updateOrCreate(
                     [
                         'school_id' => $schoolId,
-                        'exam_subject_id' => $examSubject->id,
+                        'exam_subject_id' => $lockedExamSubject->id,
                         'student_id' => $studentId,
                     ],
                     [
@@ -223,8 +276,8 @@ class ExamController extends Controller
                 );
             }
 
-            AuditLogService::log('marks_entered', 'ExamSubject', $examSubject->id, [
-                'exam_id' => $examSubject->exam_id,
+            AuditLogService::log('marks_entered', 'ExamSubject', $lockedExamSubject->id, [
+                'exam_id' => $lockedExamSubject->exam_id,
             ], $schoolId);
         });
 
@@ -236,15 +289,34 @@ class ExamController extends Controller
      */
     public function togglePublish(Exam $exam): RedirectResponse
     {
-        $schoolId = session('current_school_id');
+        $schoolId = (int) session('current_school_id');
         if ($exam->school_id !== $schoolId) {
             abort(403);
         }
 
-        $newStatus = $exam->status === 'draft' ? 'published' : ($exam->status === 'published' ? 'locked' : 'published');
-        $exam->update(['status' => $newStatus]);
+        if (! SchoolAccess::hasSchoolRole(auth()->user(), ['school_admin', 'principal'], $schoolId)) {
+            abort(403);
+        }
 
-        AuditLogService::log('exam_status_toggled', 'Exam', $exam->id, ['status' => $newStatus], $schoolId);
+        $newStatus = DB::transaction(function () use ($exam, $schoolId): string {
+            $lockedExam = Exam::query()
+                ->whereKey($exam->id)
+                ->where('school_id', $schoolId)
+                ->lockForUpdate()
+                ->firstOrFail();
+            if ($lockedExam->status === 'locked') {
+                throw ValidationException::withMessages([
+                    'status' => 'This exam is locked and cannot be unlocked from this screen.',
+                ]);
+            }
+
+            $status = $lockedExam->status === 'draft' ? 'published' : 'locked';
+            $lockedExam->update(['status' => $status]);
+
+            AuditLogService::log('exam_status_toggled', 'Exam', $lockedExam->id, ['status' => $status], $schoolId);
+
+            return $status;
+        });
 
         return back()->with('status', "Exam status updated to '{$newStatus}'.");
     }
@@ -254,23 +326,68 @@ class ExamController extends Controller
      */
     public function reportCard(Exam $exam, Student $student): View
     {
-        $schoolId = session('current_school_id');
+        $schoolId = (int) session('current_school_id');
         if ($exam->school_id !== $schoolId || $student->school_id !== $schoolId) {
             abort(403);
         }
 
-        $exam->load(['academicYear', 'examSubjects.classSubject.subject']);
+        if (! SchoolAccess::hasSchoolRole(auth()->user(), ['school_admin', 'principal'], $schoolId)) {
+            abort(403);
+        }
+
+        $enrollments = StudentEnrollment::forSchool($schoolId)
+            ->where('student_id', $student->id)
+            ->where('academic_year_id', $exam->academic_year_id)
+            ->whereIn('status', ['enrolled', 'promoted', 'transferred'])
+            ->with(['class', 'section'])
+            ->get();
+
+        if ($enrollments->count() !== 1) {
+            abort(404);
+        }
+
+        $enrollment = $enrollments->first();
+        $classId = $enrollment->class_id;
+        $exam->load('academicYear');
+        $examSubjects = ExamSubject::forSchool($schoolId)
+            ->where('exam_id', $exam->id)
+            ->whereHas('classSubject', fn ($classSubject) => $classSubject
+                ->forSchool($schoolId)
+                ->where('class_id', $classId)
+                ->where('academic_year_id', $exam->academic_year_id))
+            ->with([
+                'classSubject' => fn ($classSubject) => $classSubject
+                    ->forSchool($schoolId)
+                    ->with(['class', 'subject']),
+            ])
+            ->get();
+
+        if ($examSubjects->isEmpty()) {
+            abort(404);
+        }
+
         $marks = Mark::forSchool($schoolId)
-            ->whereIn('exam_subject_id', $exam->examSubjects->pluck('id'))
+            ->whereIn('exam_subject_id', $examSubjects->pluck('id'))
             ->where('student_id', $student->id)
             ->with('examSubject.classSubject.subject')
             ->get();
+        $marksByExamSubject = $marks->keyBy('exam_subject_id');
 
-        $totalMax = $exam->examSubjects->sum('max_marks');
+        $totalMax = $examSubjects->sum('max_marks');
         $totalObtained = $marks->where('status', 'graded')->sum('marks_obtained');
         $percentage = $totalMax > 0 ? round(($totalObtained / $totalMax) * 100, 2) : 0;
-        $grade = GradingScale::getGradeForPercentage($schoolId, $percentage) ?? ($percentage >= 50 ? 'Pass' : 'Fail');
+        $grade = GradingScale::getGradeForPercentage($schoolId, $percentage);
 
-        return view('school-admin.exams.report-card', compact('exam', 'student', 'marks', 'totalMax', 'totalObtained', 'percentage', 'grade'));
+        return view('school-admin.exams.report-card', compact(
+            'exam',
+            'student',
+            'enrollment',
+            'examSubjects',
+            'marksByExamSubject',
+            'totalMax',
+            'totalObtained',
+            'percentage',
+            'grade'
+        ));
     }
 }

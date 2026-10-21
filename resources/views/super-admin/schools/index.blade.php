@@ -83,14 +83,29 @@
                                 </span>
                             </td>
                             <td class="px-6 py-4 text-right space-x-2">
-                                <form action="{{ route('super-admin.schools.switch', $school) }}" method="POST" class="inline">
+                                <form action="{{ route('super-admin.schools.status', $school) }}" method="POST" class="inline"
+                                    @if($school->status === 'active')
+                                        onsubmit="return confirm('Deactivate this school? Its users will lose access; records and subscription history will be preserved.');"
+                                    @endif>
                                     @csrf
-                                    <button type="submit" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold px-3 py-1.5 rounded-lg text-xs transition">
-                                        Enter School
+                                    <input type="hidden" name="status" value="{{ $school->status === 'active' ? 'suspended' : 'active' }}">
+                                    <button type="submit" class="font-semibold px-3 py-1.5 rounded-lg text-xs transition {{ $school->status === 'active' ? 'bg-rose-50 hover:bg-rose-100 text-rose-700' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700' }}">
+                                        {{ $school->status === 'active' ? 'Deactivate' : 'Activate' }}
                                     </button>
                                 </form>
+                                @if(config('saas.support_access_enabled'))
+                                    <form action="{{ route('super-admin.schools.switch', $school) }}" method="POST" class="inline">
+                                        @csrf
+                                        <button type="submit" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold px-3 py-1.5 rounded-lg text-xs transition">
+                                            Support access
+                                        </button>
+                                    </form>
+                                @endif
                                 <a href="{{ route('super-admin.schools.show', $school) }}" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold transition">
                                     Details
+                                </a>
+                                <a href="{{ route('super-admin.schools.edit', $school) }}" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold transition">
+                                    Edit
                                 </a>
                             </td>
                         </tr>

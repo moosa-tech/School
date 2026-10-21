@@ -2,6 +2,8 @@
 
 namespace App\Support;
 
+use App\Models\ClassSubject;
+use App\Models\School;
 use App\Models\User;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Exists;
@@ -26,6 +28,45 @@ class SchoolAccess
     public static function supportAccessEnabled(): bool
     {
         return (bool) config('saas.support_access_enabled', false);
+    }
+
+    public static function portalForRole(?string $role): ?string
+    {
+        return match ($role) {
+            'school_admin', 'principal' => 'school_admin',
+            'teacher' => 'teacher',
+            'accountant' => 'accountant',
+            'staff' => 'staff',
+            'student' => 'student',
+            default => null,
+        };
+    }
+
+    public static function roleCanAccessSchool(School $school, ?string $role): bool
+    {
+        if ($school->status !== 'active') {
+            return false;
+        }
+
+        $portal = self::portalForRole($role);
+
+        return $portal === null || $school->isPortalEnabled($portal);
+    }
+
+    public static function teacherIsAssignedToClassSubject(User $user, ClassSubject $classSubject, int $schoolId): bool
+    {
+        if ($user->schoolRole($schoolId) !== 'teacher' || $classSubject->school_id !== $schoolId) {
+            return false;
+        }
+
+        return $classSubject->teacherAssignments()
+            ->where('school_id', $schoolId)
+            ->whereHas('employee', fn ($employee) => $employee
+                ->where('school_id', $schoolId)
+                ->where('user_id', $user->id)
+                ->where('role', 'teacher')
+                ->where('status', 'active'))
+            ->exists();
     }
 
     /**

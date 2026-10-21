@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Models\School;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -121,6 +122,69 @@ class LoginAuthenticationTest extends TestCase
             ->assertSessionHasErrors(['email' => 'Invalid email or password.']);
 
         $this->assertGuest();
+    }
+
+    public function test_inactive_school_members_are_rejected_at_login(): void
+    {
+        [$user, $schoolId] = $this->createSchoolUser('inactive@example.test', 'school_admin');
+        School::query()->findOrFail($schoolId)->update(['status' => 'suspended']);
+
+        $this->post(route('login.post'), [
+            'email' => $user->email,
+            'password' => 'correct-password',
+        ])
+            ->assertRedirect(route('login'))
+            ->assertSessionHasErrors([
+                'email' => 'Your school account is currently inactive. Please contact your school administrator.',
+            ]);
+
+        $this->assertGuest();
+    }
+
+    public function test_a_logged_in_member_is_logged_out_after_school_deactivation(): void
+    {
+        [$user, $schoolId] = $this->createSchoolUser('existing-session@example.test', 'school_admin');
+
+        School::query()->findOrFail($schoolId)->update(['status' => 'suspended']);
+
+        $this->actingAs($user)
+            ->withSession(['current_school_id' => $schoolId])
+            ->get(route('school-admin.dashboard'))
+            ->assertRedirect(route('login'))
+            ->assertSessionHasErrors([
+                'school' => 'Your school account is currently inactive. Please contact your school administrator.',
+            ]);
+
+        $this->assertGuest();
+    }
+
+    public function test_disabled_student_portal_does_not_block_school_administration(): void
+    {
+        [$student, $schoolId] = $this->createSchoolUser('portal-student@example.test', 'student');
+        School::query()->findOrFail($schoolId)->update(['enabled_portals' => ['school_admin']]);
+
+        $this->post(route('login.post'), [
+            'email' => $student->email,
+            'password' => 'correct-password',
+        ])
+            ->assertRedirect(route('login'))
+            ->assertSessionHasErrors([
+                'email' => 'The portal for your role is currently disabled for this school.',
+            ]);
+
+        $this->assertGuest();
+
+        $schoolAdmin = User::factory()->create();
+        $schoolAdmin->schools()->attach($schoolId, [
+            'role' => 'school_admin',
+            'status' => 'active',
+            'joined_at' => now(),
+        ]);
+
+        $this->actingAs($schoolAdmin)
+            ->withSession(['current_school_id' => $schoolId])
+            ->get(route('school-admin.students.index'))
+            ->assertOk();
     }
 
     public function test_authenticated_user_can_log_out(): void

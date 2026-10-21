@@ -13,6 +13,14 @@ class School extends Model
 {
     use HasFactory;
 
+    public const PORTAL_LABELS = [
+        'school_admin' => 'School Admin Portal',
+        'teacher' => 'Teacher Portal',
+        'accountant' => 'Accountant Portal',
+        'staff' => 'Staff Portal',
+        'student' => 'Student Portal',
+    ];
+
     protected $fillable = [
         'name',
         'slug',
@@ -23,7 +31,35 @@ class School extends Model
         'timezone',
         'status', // pending, active, suspended, archived
         'created_by',
+        'enabled_portals',
     ];
+
+    /**
+     * Attribute casts.
+     *
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'enabled_portals' => 'array',
+        ];
+    }
+
+    /**
+     * Check whether a named portal is enabled for this school.
+     *
+     * NULL means all portals are enabled (backward-compatible default).
+     * Supported portal keys are defined by PORTAL_LABELS.
+     */
+    public function isPortalEnabled(string $portal): bool
+    {
+        if ($this->enabled_portals === null) {
+            return true;
+        }
+
+        return in_array($portal, $this->enabled_portals, true);
+    }
 
     /**
      * Users associated with this school.

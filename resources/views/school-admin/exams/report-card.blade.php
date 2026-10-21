@@ -43,11 +43,11 @@
             </div>
             <div>
                 <span class="text-slate-400 uppercase font-semibold">Current Class:</span>
-                <div class="font-semibold text-slate-900 mt-0.5">{{ $student->currentEnrollment?->class?->name ?? 'N/A' }} ({{ $student->currentEnrollment?->section?->name ?? 'A' }})</div>
+                <div class="font-semibold text-slate-900 mt-0.5">{{ $enrollment->class?->name ?? 'N/A' }} ({{ $enrollment->section?->name ?? 'N/A' }})</div>
             </div>
             <div>
                 <span class="text-slate-400 uppercase font-semibold">Roll Number:</span>
-                <div class="font-bold text-slate-900 mt-0.5">{{ $student->currentEnrollment?->roll_number ?? 'N/A' }}</div>
+                <div class="font-bold text-slate-900 mt-0.5">{{ $enrollment->roll_number ?? 'N/A' }}</div>
             </div>
         </div>
 
@@ -64,21 +64,35 @@
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-                @foreach($marks as $idx => $m)
+                @foreach($examSubjects as $idx => $examSubject)
                     @php
-                        $pass = ($m->marks_obtained ?? 0) >= $m->examSubject->passing_marks;
+                        $mark = $marksByExamSubject->get($examSubject->id);
+                        $status = $mark?->status ?? 'not_entered';
+                        $pass = $status === 'graded' && $mark->marks_obtained >= $examSubject->passing_marks;
+                        $displayMark = match ($status) {
+                            'graded' => $mark->marks_obtained,
+                            'absent' => 'AB',
+                            'exempt' => 'Exempt',
+                            default => 'Not entered',
+                        };
+                        $remark = match ($status) {
+                            'absent' => 'Absent',
+                            'exempt' => 'Exempt',
+                            'not_entered' => 'Not entered',
+                            default => $pass ? 'Passed' : 'Failed',
+                        };
                     @endphp
                     <tr>
                         <td class="p-3 text-slate-400">{{ $idx + 1 }}</td>
-                        <td class="p-3 font-semibold text-slate-800">{{ $m->examSubject->classSubject->subject->name }}</td>
-                        <td class="p-3 text-center font-mono">{{ $m->examSubject->max_marks }}</td>
-                        <td class="p-3 text-center font-mono">{{ $m->examSubject->passing_marks }}</td>
+                        <td class="p-3 font-semibold text-slate-800">{{ $examSubject->classSubject->subject->name }}</td>
+                        <td class="p-3 text-center font-mono">{{ $examSubject->max_marks }}</td>
+                        <td class="p-3 text-center font-mono">{{ $examSubject->passing_marks }}</td>
                         <td class="p-3 text-center font-mono font-bold text-sm {{ $pass ? 'text-indigo-700' : 'text-rose-600' }}">
-                            {{ $m->marks_obtained ?? 'AB' }}
+                            {{ $displayMark }}
                         </td>
                         <td class="p-3 text-right">
-                            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase {{ $pass ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700' }}">
-                                {{ $pass ? 'Passed' : 'Failed' }}
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase {{ $status === 'graded' ? ($pass ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700') : 'bg-slate-100 text-slate-600' }}">
+                                {{ $remark }}
                             </span>
                         </td>
                     </tr>
@@ -90,7 +104,7 @@
                     <td class="p-3 text-center font-mono">{{ $totalMax }}</td>
                     <td class="p-3 text-center">-</td>
                     <td class="p-3 text-center font-mono text-base text-indigo-700">{{ $totalObtained }}</td>
-                    <td class="p-3 text-right font-bold text-emerald-700">{{ $percentage }}% (Grade {{ $grade }})</td>
+                    <td class="p-3 text-right font-bold text-emerald-700">{{ $percentage }}% (Grade {{ $grade ?? 'Not configured' }})</td>
                 </tr>
             </tfoot>
         </table>

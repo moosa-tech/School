@@ -10,7 +10,11 @@
                 Exam: <strong>{{ $examSubject->exam->name }}</strong> • Class: <strong>{{ $examSubject->classSubject->class->name }}</strong> • Max Marks: <strong>{{ $examSubject->max_marks }}</strong>
             </p>
         </div>
-        <a href="{{ route('school-admin.exams.show', $examSubject->exam) }}" class="text-xs font-semibold text-slate-500 hover:text-slate-700">Back to Schedule</a>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="{{ route('school-admin.exams.marks.import', $examSubject) }}" class="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">Import Marks from Excel</a>
+            <a href="{{ route('school-admin.exams.marks.export', $examSubject) }}" class="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200">Export Marks</a>
+            <a href="{{ route('school-admin.exams.show', $examSubject->exam) }}" class="text-xs font-semibold text-slate-500 hover:text-slate-700">Back to Schedule</a>
+        </div>
     </div>
 
     <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 sm:p-8 space-y-4">

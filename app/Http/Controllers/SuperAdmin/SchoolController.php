@@ -18,6 +18,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
@@ -58,8 +59,20 @@ class SchoolController extends Controller
     public function create(): View
     {
         $plans = Plan::where('is_active', true)->get();
+        $portals = School::PORTAL_LABELS;
 
-        return view('super-admin.schools.create', compact('plans'));
+        return view('super-admin.schools.create', compact('plans', 'portals'));
+    }
+
+    /**
+     * Show school configuration.
+     */
+    public function edit(School $school): View
+    {
+        return view('super-admin.schools.edit', [
+            'school' => $school,
+            'portals' => School::PORTAL_LABELS,
+        ]);
     }
 
     /**
@@ -77,6 +90,9 @@ class SchoolController extends Controller
             'timezone' => ['required', 'string', 'max:50'],
             'plan_id' => ['required', 'exists:plans,id'],
             'is_trial' => ['nullable', 'boolean'],
+            'status' => ['required', 'in:active,pending'],
+            'enabled_portals' => ['required', 'array', 'contains:school_admin'],
+            'enabled_portals.*' => ['required', Rule::in(array_keys(School::PORTAL_LABELS))],
         ]);
 
         $adminEmail = strtolower(trim($validated['admin_email']));
@@ -90,7 +106,7 @@ class SchoolController extends Controller
             ? Str::slug($validated['slug'])
             : Str::slug($validated['name']).'-'.Str::random(4);
 
-        $school = DB::transaction(function () use ($request, $validated, $adminEmail, $baseSlug) {
+        [$school, $invitationUrl] = DB::transaction(function () use ($request, $validated, $adminEmail, $baseSlug) {
             $slug = $baseSlug;
             $suffix = 1;
             while (School::query()->where('slug', $slug)->exists()) {
@@ -105,8 +121,9 @@ class SchoolController extends Controller
                 'address' => $validated['address'] ?? null,
                 'currency' => $validated['currency'],
                 'timezone' => $validated['timezone'],
-                'status' => 'active',
+                'status' => $validated['status'],
                 'created_by' => auth()->id(),
+                'enabled_portals' => array_values(array_unique($validated['enabled_portals'])),
             ]);
 
             $isTrial = $request->boolean('is_trial');
@@ -119,32 +136,27 @@ class SchoolController extends Controller
                 'trial_ends_at' => $isTrial ? now()->addDays(14) : null,
             ]);
 
-            $admin = User::create([
-                'name' => $school->name.' Admin',
-                'email' => $adminEmail,
-                'password' => $slug,
-                'status' => 'active',
-            ]);
-
-            $admin->schools()->attach($school->id, [
-                'role' => 'school_admin',
-                'status' => 'active',
-                'joined_at' => now(),
-            ]);
+            $invitation = $this->invitationService->issueInvitation(
+                $school,
+                $adminEmail,
+                'school_admin',
+                auth()->user()
+            );
 
             AuditLogService::log('school_created', 'School', $school->id, [
                 'name' => $school->name,
-                'admin_email' => $adminEmail,
                 'plan_id' => $validated['plan_id'],
+                'status' => $school->status,
+                'enabled_portals' => $school->enabled_portals,
             ], $school->id);
 
-            return $school;
+            return [$school, $invitation['url']];
         });
 
         return redirect()->route('super-admin.schools.show', $school)
-            ->with('status', "School '{$school->name}' created. The school admin password is the school slug.")
+            ->with('status', "School '{$school->name}' created. Share the school admin invitation link securely.")
             ->with('initial_admin_email', $adminEmail)
-            ->with('initial_admin_password', $school->slug);
+            ->with('invitation_url', $invitationUrl);
     }
 
     /**
@@ -152,7 +164,7 @@ class SchoolController extends Controller
      */
     public function show(School $school): View
     {
-        $school->load(['subscriptions.plan', 'invitations', 'users', 'currentSubscription.plan']);
+        $school->load(['subscriptions.plan', 'currentSubscription.plan']);
 
         $overview = [
             'student_count' => Student::withoutGlobalScope('school')->where('school_id', $school->id)->count(),
@@ -165,23 +177,98 @@ class SchoolController extends Controller
     }
 
     /**
+     * Update school configuration and enabled portals.
+     */
+    public function update(Request $request, School $school): RedirectResponse
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:150'],
+            'email' => ['nullable', 'email', 'max:150'],
+            'phone' => ['nullable', 'string', 'max:50'],
+            'address' => ['nullable', 'string'],
+            'currency' => ['required', 'string', 'max:10'],
+            'timezone' => ['required', 'string', 'max:50'],
+            'status' => ['required', 'in:active,pending,suspended,archived'],
+            'enabled_portals' => ['required', 'array', 'contains:school_admin'],
+            'enabled_portals.*' => ['required', Rule::in(array_keys(School::PORTAL_LABELS))],
+        ]);
+
+        $newValues = [
+            'name' => $validated['name'],
+            'email' => $validated['email'] ?? null,
+            'phone' => $validated['phone'] ?? null,
+            'address' => $validated['address'] ?? null,
+            'currency' => $validated['currency'],
+            'timezone' => $validated['timezone'],
+            'status' => $validated['status'],
+            'enabled_portals' => array_values(array_unique($validated['enabled_portals'])),
+        ];
+
+        DB::transaction(function () use ($school, $newValues): void {
+            $previousValues = $school->only(array_keys($newValues));
+            $previousValues['enabled_portals'] = $school->enabled_portals;
+            $previousPortals = $school->enabled_portals;
+
+            $school->update($newValues);
+
+            if ($previousValues['status'] !== $school->status) {
+                AuditLogService::log('school_status_changed', 'School', $school->id, [
+                    'old' => $previousValues['status'],
+                    'new' => $school->status,
+                ], $school->id);
+            }
+
+            if ($previousPortals !== $school->enabled_portals) {
+                AuditLogService::log('school_portals_changed', 'School', $school->id, [
+                    'old' => $previousPortals,
+                    'new' => $school->enabled_portals,
+                ], $school->id);
+            }
+
+            $previousSchoolDetails = array_intersect_key(
+                $previousValues,
+                array_flip(['name', 'email', 'phone', 'address', 'currency', 'timezone'])
+            );
+            $newSchoolDetails = array_intersect_key(
+                $newValues,
+                array_flip(['name', 'email', 'phone', 'address', 'currency', 'timezone'])
+            );
+            $changedSchoolDetails = array_keys(array_filter(
+                $newSchoolDetails,
+                fn (mixed $value, string $field): bool => $value !== $previousSchoolDetails[$field],
+                ARRAY_FILTER_USE_BOTH
+            ));
+
+            if ($changedSchoolDetails !== []) {
+                AuditLogService::log('school_configuration_updated', 'School', $school->id, [
+                    'changed_fields' => $changedSchoolDetails,
+                ], $school->id);
+            }
+        });
+
+        return back()->with('status', "School '{$school->name}' configuration updated.");
+    }
+
+    /**
      * Update school status (e.g. suspend or activate).
      */
     public function updateStatus(Request $request, School $school): RedirectResponse
     {
-        $request->validate([
+        $validated = $request->validate([
             'status' => ['required', 'in:active,pending,suspended,archived'],
         ]);
 
         $oldStatus = $school->status;
-        $school->update(['status' => $request->status]);
+        DB::transaction(function () use ($school, $validated, $oldStatus): void {
+            $school->update(['status' => $validated['status']]);
 
-        AuditLogService::log('school_status_changed', 'School', $school->id, [
-            'old' => $oldStatus,
-            'new' => $request->status,
-        ], $school->id);
+            AuditLogService::log('school_status_changed', 'School', $school->id, [
+                'old' => $oldStatus,
+                'new' => $validated['status'],
+            ], $school->id);
+        });
 
-        return back()->with('status', "School status updated to {$request->status}.");
+        return back()->with('status', "School status updated to {$validated['status']}.");
     }
 
     /**
